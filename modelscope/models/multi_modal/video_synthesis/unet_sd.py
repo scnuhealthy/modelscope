@@ -8,8 +8,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from diffusers.modeling_utils import ModelMixin
+from diffusers.utils.import_utils import is_xformers_available
 
 __all__ = ['UNetSD']
+
+if is_xformers_available():
+    import xformers
+    import xformers.ops
+else:
+    xformers = None
 
 
 def exists(x):
@@ -22,7 +30,7 @@ def default(val, d):
     return d() if callable(d) else d
 
 
-class UNetSD(nn.Module):
+class UNetSD(ModelMixin):
 
     def __init__(self,
                  in_dim=7,
@@ -413,21 +421,34 @@ class CrossAttention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h),
                       (q, k, v))
-        sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale
-        del q, k
+        
+        if False:
+            sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale
+            del q, k
 
-        if exists(mask):
-            mask = rearrange(mask, 'b ... -> b (...)')
-            max_neg_value = -torch.finfo(sim.dtype).max
-            mask = repeat(mask, 'b j -> (b h) () j', h=h)
-            sim.masked_fill_(~mask, max_neg_value)
+            if exists(mask):
+                mask = rearrange(mask, 'b ... -> b (...)')
+                max_neg_value = -torch.finfo(sim.dtype).max
+                mask = repeat(mask, 'b j -> (b h) () j', h=h)
+                sim.masked_fill_(~mask, max_neg_value)
 
-        # attention, what we cannot get enough of
-        sim = sim.softmax(dim=-1)
+            # attention, what we cannot get enough of
+            sim = sim.softmax(dim=-1)
 
-        out = torch.einsum('b i j, b j d -> b i d', sim, v)
+            out = torch.einsum('b i j, b j d -> b i d', sim, v)
+        else:
+            out = self._memory_efficient_attention_xformers(q, k, v, mask)
+            out = out.to(q.dtype)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         return self.to_out(out)
+
+    def _memory_efficient_attention_xformers(self, query, key, value, attention_mask):
+        # TODO attention_mask
+        query = query.contiguous()
+        key = key.contiguous()
+        value = value.contiguous()
+        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
+        return hidden_states
 
 
 class SpatialTransformer(nn.Module):
@@ -1001,17 +1022,28 @@ class AttentionBlock(nn.Module):
             k = torch.cat([ck, k], dim=-1)
             v = torch.cat([cv, v], dim=-1)
 
-        # compute attention
-        attn = torch.matmul(q.transpose(-1, -2) * self.scale, k * self.scale)
-        attn = F.softmax(attn, dim=-1)
+        if False:
+            # compute attention
+            attn = torch.matmul(q.transpose(-1, -2) * self.scale, k * self.scale)
+            attn = F.softmax(attn, dim=-1)
 
-        # gather context
-        x = torch.matmul(v, attn.transpose(-1, -2))
+            # gather context
+            x = torch.matmul(v, attn.transpose(-1, -2))
+        else:
+            out = self._memory_efficient_attention_xformers(q,k,v,attention_mask=None)
+            out = out.to(q.dtype)
         x = x.reshape(b, c, h, w)
         # output
         x = self.proj(x)
         return x + identity
 
+    def _memory_efficient_attention_xformers(self, query, key, value, attention_mask):
+        # TODO attention_mask
+        query = query.contiguous()
+        key = key.contiguous()
+        value = value.contiguous()
+        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
+        return hidden_states
 
 class TemporalConvBlock_v2(nn.Module):
 
