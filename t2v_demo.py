@@ -32,7 +32,7 @@ def generate(prompt: str, seed: int) -> str:
     if seed == -1:
         seed = random.randint(0, 1000000)
     torch.manual_seed(seed)
-    return pipe({'text': prompt})[OutputKeys.OUTPUT_VIDEO]
+    return pipe({'text': prompt},output_video='output_1000_seed2.mp4')[OutputKeys.OUTPUT_VIDEO]
 
 # generate('An astronaut riding a horse.',0)
 generate('a jeep car is moving on the road',2)

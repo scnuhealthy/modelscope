@@ -61,8 +61,8 @@ class TextToVideoSynthesisPipeline(Pipeline):
     def postprocess(self, inputs: Dict[str, Any],
                     **post_params) -> Dict[str, Any]:
         video = tensor2vid(inputs['video'])
-        # output_video_path = post_params.get('output_video', None)
-        output_video_path = 'output.mp4'
+        output_video_path = post_params.get('output_video', None)
+        # output_video_path = 'output.mp4'
         if output_video_path is None:
             output_video_path = tempfile.NamedTemporaryFile(suffix='.mp4').name
 

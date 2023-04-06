@@ -16,6 +16,7 @@ import decord
 from accelerate.logging import get_logger
 import numpy as np
 import imageio
+from modelscope.pipelines import pipeline
 decord.bridge.set_bridge('torch')
 
 logger = get_logger(__name__, log_level="INFO")
@@ -87,6 +88,7 @@ def main():
     max_grad_norm = 1.0
     enable_xformers_memory_efficient_attention = False
     checkpointing_steps = 500
+    validation_steps = 250
 
     # # Get the traning dataset
     # train_dataset = VideoDataset(video_path=video_path, prompt=prompt)
@@ -95,6 +97,7 @@ def main():
     # load models
     model_dir = pathlib.Path('weights')
     model = Model.from_pretrained(model_dir.as_posix(), model_prefetched=False)
+    validation_pipeline = pipeline('text-to-video-synthesis',model=model)
 
     noise_scheduler = DDIMScheduler(num_train_timesteps=1000,beta_start=0.00085,beta_end=0.0120,beta_schedule='scaled_linear')
     text_encoder = model.clip_encoder
@@ -267,10 +270,16 @@ def main():
                 # Create the pipeline using the trained modules and save it.
                 if global_step % checkpointing_steps == 0:
                     if accelerator.is_main_process:
-                        unet = accelerator.unwrap_model(unet)
+                        save_unet = accelerator.unwrap_model(unet)
                         ckpt_name = 'new_unet_step_%d.pth' % global_step
-                        torch.save(unet.state_dict(), ckpt_name)
+                        torch.save(save_unet.state_dict(), ckpt_name)
 
+                if global_step % validation_steps == 0:
+                    if accelerator.is_main_process:
+                        unet.eval()
+                        output_video = 'step%d.mp4' % global_step 
+                        validation_pipeline({'text':prompt},output_video=output_video)
+                        unet.train()
         logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
         progress_bar.set_postfix(**logs)
 
